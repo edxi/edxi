@@ -6,6 +6,7 @@ import html
 import re
 import string
 import xml.etree.ElementTree as ET
+from datetime import date
 from pathlib import Path
 
 
@@ -58,6 +59,16 @@ INLINE_CODE_SPAN = re.compile(
     r"(?<!`)(?P<ticks>`+)(?!`).*?(?<!`)(?P=ticks)(?!`)",
     flags=re.DOTALL,
 )
+ALLOWED_SVG_ELEMENTS = {
+    "svg",
+    "title",
+    "desc",
+    "style",
+    "g",
+    "rect",
+    "defs",
+    "pattern",
+}
 
 
 def _section(text: str, start_heading: str, end_heading: str) -> str:
@@ -226,7 +237,82 @@ def validate_svg(path: Path) -> list[str]:
         return [f"SVG is not well formed: {error}"]
     if root.tag.rsplit("}", 1)[-1] != "svg":
         return [f"SVG root element is invalid: {root.tag}"]
-    return []
+    errors: list[str] = []
+    if root.attrib.get("data-profile-visual") != "contribution-calendar":
+        errors.append("SVG must identify the contribution-calendar visual")
+    if root.attrib.get("data-calendar-state") not in {"placeholder", "generated"}:
+        errors.append("SVG calendar state is invalid")
+    if root.attrib.get("role") != "img":
+        errors.append("SVG must have image semantics")
+    labelled_ids = root.attrib.get("aria-labelledby", "").split()
+    elements = list(root.iter())
+    ids = {element.attrib.get("id") for element in elements if element.attrib.get("id")}
+    title_elements = [element for element in elements if element.tag.rsplit("}", 1)[-1] == "title"]
+    description_elements = [
+        element for element in elements if element.tag.rsplit("}", 1)[-1] == "desc"
+    ]
+    if (
+        labelled_ids != ["title", "description"]
+        or not set(labelled_ids).issubset(ids)
+        or len(title_elements) != 1
+        or len(description_elements) != 1
+        or not (title_elements[0].text or "").strip()
+        or not (description_elements[0].text or "").strip()
+    ):
+        errors.append("SVG accessible title and description are invalid")
+    names = {element.tag.rsplit("}", 1)[-1] for element in elements}
+    disallowed = sorted(names - ALLOWED_SVG_ELEMENTS)
+    if disallowed:
+        errors.append(f"SVG contains non-calendar elements: {', '.join(disallowed)}")
+    for element in elements:
+        for attribute, value in element.attrib.items():
+            local_attribute = attribute.rsplit("}", 1)[-1].lower()
+            lowered_value = value.lower()
+            if (
+                local_attribute.startswith("on")
+                or local_attribute in {"href", "src"}
+                or "javascript:" in lowered_value
+                or "url(http" in lowered_value
+            ):
+                errors.append("SVG contains unsafe or external content")
+                break
+    style_text = "".join((element.text or "") for element in elements if element.tag.rsplit("}", 1)[-1] == "style")
+    if "@import" in style_text.lower() or "url(http" in style_text.lower():
+        errors.append("SVG style contains external content")
+    view_box = root.attrib.get("viewBox", "").split()
+    try:
+        dimensions = [float(value) for value in view_box]
+    except ValueError:
+        dimensions = []
+    if (
+        root.attrib.get("width") != "100%"
+        or len(dimensions) != 4
+        or dimensions[0:2] != [0.0, 0.0]
+        or not 0 < dimensions[2] <= 420
+        or not 0 < dimensions[3] <= 260
+    ):
+        errors.append("SVG responsive viewBox is invalid")
+    if root.attrib.get("data-calendar-state") == "generated":
+        dated_rectangles = [
+            element
+            for element in elements
+            if element.tag.rsplit("}", 1)[-1] == "rect" and "data-date" in element.attrib
+        ]
+        if not dated_rectangles:
+            errors.append("generated SVG has no contribution days")
+        for rectangle in dated_rectangles:
+            try:
+                date.fromisoformat(rectangle.attrib["data-date"])
+            except ValueError:
+                errors.append("generated SVG has an invalid contribution date")
+                break
+            classes = set(rectangle.attrib.get("class", "").split())
+            if "day" not in classes or not classes.intersection(
+                {"level-0", "level-1", "level-2", "level-3", "level-4"}
+            ):
+                errors.append("generated SVG has an invalid contribution day class")
+                break
+    return errors
 
 
 def main() -> int:

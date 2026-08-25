@@ -64,19 +64,18 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Generate contribution calendar
-        uses: yoshi389111/github-profile-3d-contrib@7d95e7d4cdc028dd1e1cbd957d65f35efb12ae39
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          USERNAME: ${{ github.repository_owner }}
-          MAX_REPOS: "100"
-
-      - name: Install and validate generated calendar
+          GITHUB_USERNAME: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          test -s profile-3d-contrib/profile-night-green.svg
-          install -m 0644 \
-            profile-3d-contrib/profile-night-green.svg \
-            assets/contribution-calendar.svg
+          python scripts/generate_contribution_calendar.py \
+            --username "$GITHUB_USERNAME" \
+            --output assets/contribution-calendar.svg
+
+      - name: Validate generated calendar
+        run: |
+          set -euo pipefail
           python scripts/validate_profile.py \
             --readme README.md \
             --svg assets/contribution-calendar.svg

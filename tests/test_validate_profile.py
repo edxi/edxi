@@ -16,6 +16,13 @@ VMWARE_LINK = "[VMware ChatOps](https://github.com/edxi/Poshbot.VMware)"
 CONTRIBUTION_IMAGE = (
     "![GitHub contribution calendar](assets/contribution-calendar.svg)"
 )
+VALID_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 384 220" role="img" aria-labelledby="title description" data-profile-visual="contribution-calendar" data-calendar-state="placeholder">
+  <title id="title">GitHub contribution activity</title>
+  <desc id="description">A static placeholder for the public contribution view.</desc>
+  <style>.day { fill: #ebedf0; }</style>
+  <g><rect class="day" x="16" y="16" width="10" height="10" rx="2"/></g>
+</svg>
+"""
 SELECTED_WORK_LINES = f"- {OPENCLAW_LINK}\n- {VMWARE_LINK}"
 
 VALID_README = """# Hi, I'm Xi
@@ -491,17 +498,32 @@ class ProfileValidationTests(unittest.TestCase):
                 '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
                 encoding="utf-8",
             )
+            self.assertTrue(validate_svg(path))
+            path.write_text(VALID_SVG, encoding="utf-8")
             self.assertEqual(validate_svg(path), [])
+
+    def test_svg_rejects_dashboard_animation_or_missing_accessibility(self):
+        mutations = (
+            VALID_SVG.replace(' role="img"', ""),
+            VALID_SVG.replace(' aria-labelledby="title description"', ""),
+            VALID_SVG.replace(' data-profile-visual="contribution-calendar"', ""),
+            VALID_SVG.replace("</g>", "<animate attributeName=\"x\"/></g>"),
+            VALID_SVG.replace("</g>", "<text>Commit</text></g>"),
+            VALID_SVG.replace("</g>", "<path d=\"M0 0\"/></g>"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "calendar.svg"
+            for source in mutations:
+                with self.subTest(source=source):
+                    path.write_text(source, encoding="utf-8")
+                    self.assertTrue(validate_svg(path))
 
     def test_cli_reports_missing_readme_without_traceback(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             missing_readme = root / "missing.md"
             svg = root / "calendar.svg"
-            svg.write_text(
-                '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
-                encoding="utf-8",
-            )
+            svg.write_text(VALID_SVG, encoding="utf-8")
             script = Path(__file__).parents[1] / "scripts" / "validate_profile.py"
             completed = subprocess.run(
                 [
@@ -527,10 +549,7 @@ class ProfileValidationTests(unittest.TestCase):
             readme = root / "README.md"
             svg = root / "calendar.svg"
             readme.write_text(VALID_README, encoding="utf-8")
-            svg.write_text(
-                '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
-                encoding="utf-8",
-            )
+            svg.write_text(VALID_SVG, encoding="utf-8")
             script = Path(__file__).parents[1] / "scripts" / "validate_profile.py"
             svg.chmod(0)
             try:

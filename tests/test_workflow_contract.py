@@ -9,7 +9,6 @@ APPROVED_USES = (
     "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
     "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
     "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405",
-    "yoshi389111/github-profile-3d-contrib@7d95e7d4cdc028dd1e1cbd957d65f35efb12ae39",
 )
 EXPECTED_PERMISSIONS = {
     "global": {"contents": "read"},
@@ -31,6 +30,17 @@ APPROVED_COMMIT_BLOCK = """          set -euo pipefail
           git commit -m "chore: refresh profile activity"
           git pull --rebase origin "${GITHUB_REF_NAME}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+"""
+APPROVED_GENERATOR_STEP = """      - name: Generate contribution calendar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          python scripts/generate_contribution_calendar.py \\
+            --username "$GITHUB_USERNAME" \\
+            --output assets/contribution-calendar.svg
+
 """
 def uncomment(line: str) -> str:
     quote = ""
@@ -174,6 +184,17 @@ def calendar_errors(text: str) -> list[str]:
     return []
 
 
+def generator_errors(text: str) -> list[str]:
+    blocks = re.findall(
+        r"(?ms)^      - name: Generate contribution calendar\n"
+        r".*?(?=^      - name: |\Z)",
+        text,
+    )
+    if blocks != [APPROVED_GENERATOR_STEP]:
+        return ["calendar generator step must be canonical"]
+    return []
+
+
 def update_job_conditions(text: str) -> list[str]:
     lines = mapping_yaml_lines(text)
     headers = [
@@ -246,6 +267,7 @@ def workflow_errors(text: str) -> list[str]:
     ):
         errors.append("secret references must contain only the repository token")
     errors.extend(calendar_errors(text))
+    errors.extend(generator_errors(text))
     update_headers = [entry for entry in entries if entry[2] == "update-profile"]
     if (
         len(update_headers) != 1
@@ -263,11 +285,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow_errors(self.text), [])
         harmless_comments = self.text.replace(
             "permissions:\n  contents: read",
-            "permissions:\n  contents: read\n# permissions: are intentionally minimal",
+            "permissions:\n  contents: read\n"
+            "# permissions: are intentionally minimal\n"
+            "# secrets are unavailable to pull requests",
             1,
-        ).replace(
-            "MAX_REPOS: \"100\"",
-            "MAX_REPOS: \"100\"\n          # secrets are unavailable to pull requests",
         )
         self.assertEqual(workflow_errors(harmless_comments), [])
         scalar_prose = self.text.replace(
@@ -319,7 +340,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("git add -- assets/contribution-calendar.svg", self.text)
         self.assertNotIn("git add -- README.md", self.text)
         self.assertIn("git diff --cached --quiet", self.text)
-        self.assertIn("profile-night-green.svg", self.text)
+        self.assertIn("scripts/generate_contribution_calendar.py", self.text)
+        self.assertNotIn("profile-night-green.svg", self.text)
+        self.assertNotIn("github-profile-3d-contrib", self.text)
+        unsafe_generator = self.text.replace(
+            "python scripts/generate_contribution_calendar.py",
+            "python scripts/unreviewed_generator.py",
+        )
+        self.assertIn("generator", " ".join(workflow_errors(unsafe_generator)))
         mutations = {
             "add all": "git add -A",
             "add dot": "git add .",
@@ -426,8 +454,8 @@ class WorkflowContractTests(unittest.TestCase):
         for name, expression in expressions.items():
             with self.subTest(name=name):
                 unsafe = self.text.replace(
-                    "MAX_REPOS: \"100\"",
-                    "MAX_REPOS: \"100\"\n"
+                    "GITHUB_USERNAME: ${{ github.repository_owner }}",
+                    "GITHUB_USERNAME: ${{ github.repository_owner }}\n"
                     f"          EXTRA_TOKEN: ${{{{ {expression} }}}}",
                 )
                 self.assertIn("secret references", " ".join(workflow_errors(unsafe)))
