@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 380 226" preserveAspectRatio="xMinYMin meet" role="img" aria-labelledby="title description" data-profile-visual="contribution-calendar" data-calendar-state="placeholder">
+  <title id="title">GitHub contribution activity</title>
+  <desc id="description">A static calendar placeholder without embedded contribution data.</desc>
+  <style>
+    .background { fill: #f6f8fa; }
+    .day { fill: #d8dee4; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0d1117; }
+      .day { fill: #21262d; }
+    }
+  </style>
+  <defs>
+    <pattern id="days" width="13" height="13" patternUnits="userSpaceOnUse">
+      <rect class="day" width="10" height="10" rx="2"/>
+    </pattern>
+  </defs>
+  <rect class="background" width="380" height="226" rx="12"/>
+  <g aria-hidden="true">
+    <rect x="16" y="16" width="348" height="88" fill="url(#days)"/>
+    <rect x="16" y="122" width="348" height="88" fill="url(#days)"/>
+  </g>
+</svg>
