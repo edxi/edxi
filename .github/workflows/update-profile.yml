@@ -1,16 +1,16 @@
 name: Update profile
 
-run-name: Update profile / ${{ inputs.correlation_id || 'scheduled' }}
+run-name: Update profile / ${{ inputs.correlation_id || github.event_name }}
 
 on:
   pull_request:
   schedule:
-    - cron: "19 18 * * 0"
+    - cron: "17 19 * * *"
   workflow_dispatch:
     inputs:
       correlation_id:
-        description: Unique correlation ID for the requested run
-        required: true
+        description: Optional identifier for a manual verification run
+        required: false
         type: string
 
 permissions:
@@ -29,21 +29,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out pull request
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
-        with:
-          python-version: "3.13"
-
-      - name: Validate Profile
-        run: |
-          python -m unittest discover -s tests -v
-          python scripts/validate_profile.py \
-            --readme README.md \
-            --svg assets/contribution-calendar.svg
+      - name: Validate Profile contract
+        run: python -m unittest discover -s tests -v
 
   update-profile:
     if: github.event_name != 'pull_request' && github.ref_type == 'branch'
@@ -52,42 +43,31 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Check out default branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Check out triggering branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
-        with:
-          python-version: "3.13"
-
-      - name: Run contract tests
-        run: python -m unittest discover -s tests -v
-
-      - name: Generate contribution calendar
+      # Source: https://github.com/yoshi389111/github-profile-3d-contrib
+      # Release: v0.9.3 (MIT)
+      - name: Generate upstream Profile assets
+        uses: yoshi389111/github-profile-3d-contrib@7d95e7d4cdc028dd1e1cbd957d65f35efb12ae39
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_USERNAME: ${{ github.repository_owner }}
+          USERNAME: ${{ github.repository_owner }}
+
+      - name: Validate GitBlock output
         run: |
           set -euo pipefail
-          python scripts/generate_contribution_calendar.py \
-            --username "$GITHUB_USERNAME" \
-            --output assets/contribution-calendar.svg
+          test -s profile-3d-contrib/profile-gitblock.svg
+          python -c 'import xml.etree.ElementTree as ET; root = ET.parse("profile-3d-contrib/profile-gitblock.svg").getroot(); assert root.tag.rsplit("}", 1)[-1] == "svg"'
 
-      - name: Validate generated calendar
-        run: |
-          set -euo pipefail
-          python scripts/validate_profile.py \
-            --readme README.md \
-            --svg assets/contribution-calendar.svg
-
-      - name: Commit real calendar changes
+      - name: Commit generated Profile assets
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- assets/contribution-calendar.svg
+          git add -- profile-3d-contrib/
           if git diff --cached --quiet; then
-            echo "Contribution calendar is unchanged."
+            echo "Profile assets are unchanged."
             exit 0
           fi
           git commit -m "chore: refresh profile activity"
