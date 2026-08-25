@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="180" viewBox="0 0 900 180" role="img" aria-labelledby="title description">
+  <title id="title">GitHub contribution activity</title>
+  <desc id="description">A static placeholder for the public contribution view.</desc>
+  <style>
+    .background { fill: #ffffff; }
+    .primary { fill: #1f2328; }
+    .secondary { fill: #59636e; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0d1117; }
+      .primary { fill: #f0f6fc; }
+      .secondary { fill: #8b949e; }
+    }
+  </style>
+  <rect class="background" width="900" height="180" rx="16"/>
+  <g fill="#2da44e" opacity="0.9">
+    <rect x="54" y="82" width="18" height="18" rx="3"/>
+    <rect x="82" y="54" width="18" height="46" rx="3"/>
+    <rect x="110" y="68" width="18" height="32" rx="3"/>
+    <rect x="138" y="40" width="18" height="60" rx="3"/>
+  </g>
+  <text class="primary" x="184" y="77" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="21">Engineering practice, over time</text>
+  <text class="secondary" x="184" y="108" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="15">Public contribution data is not embedded in this fallback.</text>
+</svg>
