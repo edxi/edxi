@@ -92,8 +92,10 @@ jobs:
             echo "| Asset | Bytes | Rects | Animations |"
             echo "|-------|-------|-------|------------|"
             for file in profile-3d-contrib/*.svg; do
-              rects=$(grep -o '<rect' "$file" | wc -l)
-              animated=$(grep -o '<animate' "$file" | wc -l)
+              # "|| true" keeps pipefail from aborting the loop on the static
+              # themes, where grep legitimately finds no <animate> element.
+              rects=$(grep -o '<rect' "$file" | wc -l || true)
+              animated=$(grep -o '<animate' "$file" | wc -l || true)
               printf '| %s | %s | %s | %s |\n' \
                 "$(basename "$file")" "$(wc -c < "$file")" "$rects" "$animated"
             done
