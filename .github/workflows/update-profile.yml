@@ -12,6 +12,11 @@ on:
         description: Optional identifier for a manual verification run
         required: false
         type: string
+      dry_run:
+        description: Generate and validate assets without committing or pushing
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,13 +42,20 @@ jobs:
         run: python -m unittest discover -s tests -v
 
   update-profile:
-    if: github.event_name != 'pull_request' && github.ref_type == 'branch'
+    # Only the default branch may publish refreshed assets. A manual run on a
+    # feature branch would otherwise rewrite that branch's copy of the SVGs and
+    # let it drift from main.
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     permissions:
       contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      DRY_RUN: ${{ inputs.dry_run == true }}
     steps:
-      - name: Check out triggering branch
+      - name: Check out default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # Source: https://github.com/yoshi389111/github-profile-3d-contrib
@@ -58,9 +70,41 @@ jobs:
         run: |
           set -euo pipefail
           test -s profile-3d-contrib/profile-gitblock.svg
-          python -c 'import xml.etree.ElementTree as ET; root = ET.parse("profile-3d-contrib/profile-gitblock.svg").getroot(); assert root.tag.rsplit("}", 1)[-1] == "svg"'
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("profile-3d-contrib/profile-gitblock.svg").getroot()
+          assert root.tag.rsplit("}", 1)[-1] == "svg"
+          PY
+
+      # Re-run the full contract suite against the freshly generated SVGs so a
+      # changed upstream output can never be committed to main unvalidated.
+      - name: Validate Profile contract against generated assets
+        run: python -m unittest discover -s tests -v
+
+      - name: Summarise generated assets
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### Profile refresh summary"
+            echo ""
+            echo "| Asset | Bytes | Rects | Animations |"
+            echo "|-------|-------|-------|------------|"
+            for file in profile-3d-contrib/*.svg; do
+              rects=$(grep -o '<rect' "$file" | wc -l)
+              animated=$(grep -o '<animate' "$file" | wc -l)
+              printf '| %s | %s | %s | %s |\n' \
+                "$(basename "$file")" "$(wc -c < "$file")" "$rects" "$animated"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Dry run: no commit or push was attempted." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Commit generated Profile assets
+        if: env.DRY_RUN != 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -72,4 +116,12 @@ jobs:
           fi
           git commit -m "chore: refresh profile activity"
           git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+          done
+          echo "Push to ${GITHUB_REF_NAME} failed after 3 attempts." >&2
+          exit 1
