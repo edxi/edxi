@@ -66,6 +66,54 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           USERNAME: ${{ github.repository_owner }}
 
+      # The upstream GitBlock asset hard-codes a light palette, which renders as
+      # a bright white block under GitHub's dark theme. Appending a media query
+      # repaints only the neutral surfaces and text; the contribution colour
+      # ramp is deliberately left on its upstream values.
+      - name: Inject dark colour palette
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          ASSET = Path("profile-3d-contrib/profile-gitblock.svg")
+
+          DARK_PALETTE = """
+          @media (prefers-color-scheme: dark) {
+            .fill-bg { fill: #0d1117; }
+            .stroke-bg { stroke: #0d1117; }
+            .fill-fg { fill: #e6edf3; }
+            .stroke-fg { stroke: #e6edf3; }
+            .fill-strong { fill: #f0f6fc; }
+            .fill-weak { fill: #7d8590; }
+            .stroke-weak { stroke: #7d8590; }
+            .cont-top-bg-0 { fill: #21262d; }
+            .cont-top-fg-0 { fill: #484f58; }
+            .cont-right-bg-0 { fill: rgb(60, 68, 77); }
+            .cont-right-fg-0 { fill: rgb(139, 148, 158); }
+            .cont-left-bg-0 { fill: rgb(48, 54, 61); }
+            .cont-left-fg-0 { fill: rgb(110, 118, 129); }
+          }
+          """
+
+          source = ASSET.read_text(encoding="utf-8")
+          if "prefers-color-scheme" in source:
+              print("Dark palette already present; leaving the asset untouched.")
+          else:
+              marker = "</style>"
+              if marker not in source:
+                  raise SystemExit("GitBlock asset has no </style> element to extend.")
+              index = source.index(marker)
+              ASSET.write_text(
+                  source[:index] + DARK_PALETTE + source[index:], encoding="utf-8"
+              )
+              print("Injected the dark palette into the GitBlock asset.")
+
+          # Fail loudly if the upstream markup ever stops matching, otherwise the
+          # palette would silently stop being applied.
+          assert "prefers-color-scheme" in ASSET.read_text(encoding="utf-8")
+          PY
+
       - name: Validate GitBlock output
         run: |
           set -euo pipefail
