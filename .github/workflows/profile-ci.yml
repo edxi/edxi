@@ -1,0 +1,423 @@
+name: Profile CI
+
+run-name: Profile CI / ${{ github.event_name }} / ${{ github.ref_name }}
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  YAMLLINT_VERSION: "1.38.0"
+
+jobs:
+  lint:
+    name: Lint workflows and README
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned linters
+        run: python -m pip install --disable-pip-version-check "yamllint==${YAMLLINT_VERSION}"
+
+      - name: YAML lint workflow files
+        run: yamllint .github/workflows/
+
+      - name: Static analysis of workflow files
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check --strict -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint
+
+      - name: README asset references resolve
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          readme = Path("README.md").read_text(encoding="utf-8")
+          missing = []
+          for target in re.findall(r"!?\[[^\]]*\]\((\.{0,2}/[^)]+)\)", readme):
+              path = Path(target.lstrip("./"))
+              if not path.is_file():
+                  missing.append(target)
+          if missing:
+              print("README references files that do not exist:")
+              for item in missing:
+                  print(f"  - {item}")
+              sys.exit(1)
+          print(f"All local README asset references resolve ({len(missing) == 0}).")
+          PY
+
+  test:
+    name: Contract tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run contract test suite
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee test-output.log
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: test-log-py${{ matrix.python-version }}
+          path: test-output.log
+          retention-days: 7
+          if-no-files-found: error
+
+  build:
+    name: Build and package profile assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify profile asset build contract
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          assets = Path("profile-3d-contrib")
+          problems = []
+          for svg in sorted(assets.glob("*.svg")):
+              source = svg.read_text(encoding="utf-8")
+              root = ET.fromstring(source)
+              rects = source.count("<rect")
+              animated = source.count("<animate")
+              bytes_ = svg.stat().st_size
+              if root.tag.rsplit("}", 1)[-1] != "svg":
+                  problems.append(f"{svg.name}: root element is not svg")
+              if not root.get("viewBox"):
+                  problems.append(f"{svg.name}: missing viewBox")
+              if bytes_ < 20_000:
+                  problems.append(f"{svg.name}: only {bytes_} bytes")
+              if rects < 100:
+                  problems.append(f"{svg.name}: only {rects} rects")
+              if problems:
+                  continue
+              print(f"{svg.name}: {bytes_} bytes, {rects} rects, {animated} animations")
+
+          gitblock = assets / "profile-gitblock.svg"
+          gitblock_source = gitblock.read_text(encoding="utf-8")
+          if gitblock.stat().st_size <= 50_000:
+              problems.append("profile-gitblock.svg: smaller than the 50KB contract floor")
+          if gitblock_source.count("<rect") <= 300:
+              problems.append("profile-gitblock.svg: fewer than 300 rects")
+          if "<animate" not in gitblock_source:
+              problems.append("profile-gitblock.svg: no animation elements")
+
+          if problems:
+              print("Asset build contract violations:")
+              for item in problems:
+                  print(f"  - {item}")
+              raise SystemExit(1)
+          PY
+
+      - name: Assemble preview site bundle
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import shutil
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          assets = Path("profile-3d-contrib")
+          site = Path("_site")
+          target_assets = site / "profile-3d-contrib"
+          target_assets.mkdir(parents=True, exist_ok=True)
+
+          variants = []
+          for svg in sorted(assets.glob("*.svg")):
+              shutil.copy2(svg, target_assets / svg.name)
+              source = svg.read_text(encoding="utf-8")
+              root = ET.fromstring(source)
+              variants.append(
+                  {
+                      "name": svg.name,
+                      "title": svg.stem.removeprefix("profile-").replace("-", " "),
+                      "bytes": svg.stat().st_size,
+                      "rects": source.count("<rect"),
+                      "animated": source.count("<animate"),
+                      "width": root.get("width", ""),
+                      "height": root.get("height", ""),
+                  }
+              )
+
+          light = "profile-3d-contrib/profile-gitblock.svg"
+          dark = "profile-3d-contrib/profile-night-green.svg"
+
+          style = """
+          :root {
+            color-scheme: light dark;
+            --page-bg: #f6f8fa;
+            --card-bg: #ffffff;
+            --fg: #1f2328;
+            --muted: #59636e;
+            --accent: #0969da;
+            --border: #d1d9e0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --page-bg: #0d1117;
+              --card-bg: #151b23;
+              --fg: #f0f6fc;
+              --muted: #9198a1;
+              --accent: #4493f8;
+              --border: #3d444d;
+            }
+          }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 32px 16px 64px;
+            background: var(--page-bg);
+            color: var(--fg);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+          }
+          main { max-width: 1180px; margin: 0 auto; }
+          h1 { font-size: 24px; margin: 0 0 4px; }
+          p.lede { margin: 0 0 24px; color: var(--muted); }
+          .stage {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 32px;
+          }
+          .stage-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+          }
+          .stage-bar strong { font-size: 15px; }
+          .toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+          .toggle button {
+            border: 0;
+            background: transparent;
+            color: var(--fg);
+            padding: 6px 14px;
+            font-size: 13px;
+            cursor: pointer;
+          }
+          .toggle button[aria-pressed="true"] { background: var(--accent); color: #ffffff; }
+          .stage img { display: block; width: 100%; height: auto; }
+          .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 16px;
+          }
+          .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+          }
+          .card h2 { font-size: 14px; margin: 0 0 2px; text-transform: capitalize; }
+          .card .meta { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+          .card img { width: 100%; height: auto; border-radius: 6px; }
+          footer { margin-top: 32px; font-size: 12px; color: var(--muted); }
+          footer a { color: var(--accent); }
+          """
+
+          script = """
+          (function () {
+            var stageImage = document.getElementById("stage-image");
+            var buttons = document.querySelectorAll(".toggle button");
+            var sources = {
+              light: "%LIGHT%",
+              dark: "%DARK%"
+            };
+            var current = "light";
+            buttons.forEach(function (button) {
+              button.addEventListener("click", function () {
+                current = button.getAttribute("data-theme");
+                stageImage.src = sources[current];
+                buttons.forEach(function (other) {
+                  other.setAttribute("aria-pressed", String(other === button));
+                });
+              });
+            });
+          })();
+          """
+
+          script = script.replace("%LIGHT%", light).replace("%DARK%", dark)
+
+          cards = []
+          for variant in variants:
+              cards.append(
+                  '<article class="card">'
+                  "<h2>{title}</h2>"
+                  '<p class="meta">{bytes} bytes - {rects} rects - {animated} animations</p>'
+                  '<img src="profile-3d-contrib/{name}" alt="{title} contribution profile preview" />'
+                  "</article>".format(**variant)
+              )
+
+          html = (
+              "<!DOCTYPE html>"
+              '<html lang="en">'
+              "<head>"
+              '<meta charset="utf-8" />'
+              '<meta name="viewport" content="width=device-width, initial-scale=1" />'
+              "<title>edxi profile assets</title>"
+              "<style>" + style + "</style>"
+              "</head>"
+              "<body>"
+              "<main>"
+              "<h1>GitHub profile assets</h1>"
+              '<p class="lede">Generated contribution visualisations for '
+              '<a href="https://github.com/edxi">github.com/edxi</a>, '
+              "rebuilt by Profile CI.</p>"
+              '<section class="stage">'
+              '<div class="stage-bar">'
+              "<strong>Live README asset</strong>"
+              '<span class="toggle">'
+              '<button type="button" data-theme="light" aria-pressed="true">Light</button>'
+              '<button type="button" data-theme="dark" aria-pressed="false">Dark</button>'
+              "</span>"
+              "</div>"
+              '<img id="stage-image" src="' + light + '" alt="GitBlock contribution profile" />'
+              "</section>"
+              '<section class="grid">' + "".join(cards) + "</section>"
+              "<footer>Built from profile-3d-contrib. "
+              'Source: <a href="https://github.com/edxi/edxi">edxi/edxi</a>.</footer>'
+              "</main>"
+              "<script>" + script + "</script>"
+              "</body>"
+              "</html>"
+          )
+
+          (site / "index.html").write_text(html, encoding="utf-8")
+          manifest = {"light": light, "dark": dark, "variants": variants}
+          (site / "manifest.json").write_text(
+              __import__("json").dumps(manifest, indent=2), encoding="utf-8"
+          )
+          print(f"Assembled _site with {len(variants)} variants.")
+          PY
+
+      - name: Upload site bundle artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: site-bundle-${{ github.sha }}
+          path: _site/
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy-pages:
+    name: Publish profile preview site
+    needs: [lint, test, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check GitHub Pages is enabled
+        id: pages-state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/pages" > /dev/null 2>&1; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "GitHub Pages is not enabled for this repository; skipping deploy." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Download site bundle
+        if: steps.pages-state.outputs.enabled == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: site-bundle-${{ github.sha }}
+          path: _site
+
+      - name: Configure Pages
+        if: steps.pages-state.outputs.enabled == 'true'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+
+      - name: Upload Pages artifact
+        if: steps.pages-state.outputs.enabled == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        if: steps.pages-state.outputs.enabled == 'true'
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
+
+  smoke:
+    name: Post-deploy smoke check
+    needs: deploy-pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify live profile renders the GitBlock asset
+        run: |
+          set -euo pipefail
+          profile_url="https://github.com/${GITHUB_REPOSITORY_OWNER}"
+          for attempt in 1 2 3 4 5; do
+            if curl -sSfL "${profile_url}" | grep -q "profile-gitblock.svg"; then
+              echo "Live profile at ${profile_url} renders the GitBlock asset."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: GitBlock asset not visible yet."
+            sleep 20
+          done
+          echo "Live profile did not render the GitBlock asset within the retry window." >&2
+          exit 1
