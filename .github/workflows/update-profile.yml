@@ -54,6 +54,10 @@ jobs:
     timeout-minutes: 15
     env:
       DRY_RUN: ${{ inputs.dry_run == true }}
+      GITHUB_TOKEN: ${{ secrets.PROFILE_STATS_TOKEN || secrets.GITHUB_TOKEN }}
+      USERNAME: ${{ github.repository_owner }}
+      EXCLUDE_REPOS: edxi.github.io,ob
+      EXCLUDE_LANGUAGES: HTML
     steps:
       - name: Check out default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -63,7 +67,7 @@ jobs:
       - name: Generate upstream Profile assets
         uses: yoshi389111/github-profile-3d-contrib@7d95e7d4cdc028dd1e1cbd957d65f35efb12ae39
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PROFILE_STATS_TOKEN || secrets.GITHUB_TOKEN }}
           USERNAME: ${{ github.repository_owner }}
 
       # The upstream GitBlock asset hard-codes a light palette, which renders as
@@ -113,6 +117,12 @@ jobs:
           # palette would silently stop being applied.
           assert "prefers-color-scheme" in ASSET.read_text(encoding="utf-8")
           PY
+
+      # Upstream draws other = totalCommitContributions - top 5, so generated
+      # HTML and languageless repos leak back into the pie. Rebuild the pie
+      # from classified languages only.
+      - name: Rewrite language pie
+        run: python scripts/rewrite_language_pie.py
 
       - name: Validate GitBlock output
         run: |

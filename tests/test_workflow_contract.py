@@ -32,8 +32,13 @@ class WorkflowContractTests(unittest.TestCase):
     def test_permissions_and_generation_inputs_are_minimal(self):
         self.assertIn("permissions:\n  contents: read", self.text)
         self.assertEqual(self.text.count("contents: write"), 1)
-        self.assertIn("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", self.text)
+        self.assertIn(
+            "GITHUB_TOKEN: ${{ secrets.PROFILE_STATS_TOKEN || secrets.GITHUB_TOKEN }}",
+            self.text,
+        )
         self.assertIn("USERNAME: ${{ github.repository_owner }}", self.text)
+        self.assertIn("EXCLUDE_REPOS: edxi.github.io,ob", self.text)
+        self.assertIn("EXCLUDE_LANGUAGES: HTML", self.text)
         self.assertNotIn("PERSONAL_ACCESS_TOKEN", self.text)
         self.assertNotIn("setup-python", self.text)
 
@@ -50,12 +55,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("git add -- README.md", self.text)
         self.assertLess(
             self.text.index("uses: " + GITBLOCK),
+            self.text.index("- name: Rewrite language pie"),
+        )
+        self.assertLess(
+            self.text.index("- name: Rewrite language pie"),
             self.text.index("- name: Validate GitBlock output"),
         )
         self.assertLess(
             self.text.index("- name: Validate GitBlock output"),
             self.text.index("- name: Commit generated Profile assets"),
         )
+        self.assertIn("scripts/rewrite_language_pie.py", self.text)
 
 
 if __name__ == "__main__":
